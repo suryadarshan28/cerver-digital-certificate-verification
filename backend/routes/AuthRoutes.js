@@ -10,6 +10,101 @@ const {
 
 const router = express.Router();
 
+const ADMIN_SETUP_SECRET = process.env.ADMIN_SETUP_SECRET;
+
+// ONE-TIME ADMIN SETUP
+router.post("/setup-admin", async (req, res) => {
+  try {
+    if (!ADMIN_SETUP_SECRET) {
+      return res.status(503).json({
+        message: "Admin setup is not configured",
+      });
+    }
+
+    const providedSecret = req.get("x-admin-setup-secret");
+
+    if (
+      typeof providedSecret !== "string" ||
+      providedSecret.length !== ADMIN_SETUP_SECRET.length ||
+      !require("crypto").timingSafeEqual(
+        Buffer.from(providedSecret),
+        Buffer.from(ADMIN_SETUP_SECRET)
+      )
+    ) {
+      return res.status(403).json({
+        message: "Invalid setup secret",
+      });
+    }
+
+    // Only allow setup when no administrator exists.
+    const existingAdmin = await User.exists({ role: "admin" });
+
+    if (existingAdmin) {
+      return res.status(409).json({
+        message: "An administrator already exists",
+      });
+    }
+
+    const { name, email, password } = req.body;
+
+    if (
+      typeof name !== "string" ||
+      !name.trim() ||
+      typeof email !== "string" ||
+      !email.trim() ||
+      typeof password !== "string"
+    ) {
+      return res.status(400).json({
+        message: "Name, email and password are required",
+      });
+    }
+
+    if (!isStrongPassword(password)) {
+      return res.status(400).json({
+        message:
+          "Password must have at least 8 characters, an uppercase letter, a lowercase letter and a number",
+      });
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+
+    const existingUser = await User.findOne({
+      email: normalizedEmail,
+    });
+
+    if (existingUser) {
+      return res.status(409).json({
+        message: "This email is already registered",
+      });
+    }
+
+    const admin = await User.create({
+      name: name.trim(),
+      email: normalizedEmail,
+      password,
+      role: "admin",
+    });
+
+    return res.status(201).json({
+      message: "Administrator created successfully",
+      user: publicUser(admin),
+    });
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({
+        message: "Email is already registered",
+      });
+    }
+
+    console.error("Admin setup error:", error.message);
+
+    return res.status(500).json({
+      message: "Unable to create administrator",
+    });
+  }
+});
+
+
 const generateToken = (user) => {
   return jwt.sign(
     { id: user._id.toString(), role: user.role },
